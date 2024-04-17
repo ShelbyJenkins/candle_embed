@@ -1,34 +1,20 @@
 [package]
 categories=[
-    "RAG",
-    "ai",
-    "candle",
     "cuda",
     "embeddings",
     "hugging-face",
-    "machine-learning",
-    "retrieval",
-    "rust",
-    "semantic-search",
     "vector-embeddings",
-    "vector-search",
+    "vectors",
 ]
 description="A simple, CUDA or CPU powered, library for creating vector embeddings using Candle and models from Hugging Face"
 edition="2021"
 homepage="https://github.com/shelbyJenkins/candle_embed"
 keywords=[
-    "RAG",
-    "ai",
-    "candle",
     "cuda",
     "embeddings",
     "hugging-face",
-    "machine-learning",
-    "retrieval",
-    "rust",
-    "semantic-search",
     "vector-embeddings",
-    "vector-search",
+    "vectors",
 ]
 license="MIT"
 name="candle_embed"
@@ -38,7 +24,6 @@ version="0.1.0"
 
 [dependencies]
 anyhow="1.0.82"
-
 candle={version="0.4.1", package="candle-core", default-features=false}
 candle-transformers="0.4.1"
 candle_nn={version="0.4.1", package="candle-nn", default-features=false}

@@ -4,11 +4,11 @@ CandleEmbed is a Rust library for creating embeddings using BERT-based models. I
 
 Features
 
-- Enums for most popular embedding models
-
-- Specify custom model from HF
+- Enums for most popular embedding models OR specify custom models from HF
 
 - Support for CUDA devices (requires feature flag)
+
+- Can load and unload as required for better memory management 
 
 Installation
 
@@ -26,6 +26,9 @@ If you want to use CUDA devices, enable the cuda feature flag:
 candle_embed = { version = "0.1.0", features = ["cuda"] }
 ```
 
+Or you can just clone the repo. It's literally just a single file.
+
+
 Usage
 
 ```rust
@@ -34,45 +37,58 @@ use candle_embed::{CandleEmbedBuilder, WithModel};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a builder with default settings
+    //
     let builder = CandleEmbedBuilder::new();
     
-    // Customize the builder (optional)
+    //
+    // Optional settings 
+    //
+
+    // Customize the builder
+    //
     let builder = builder
-        .set_model_from_presets(WithModel::UaeLargeV1)
         .normalize_embeddings(true)
         .approximate_gelu(true);
 
     // Set model from preset
+    //
     builder
         .set_model_from_presets(WithModel::UaeLargeV1);
 
     // Or use a custom model and revision
+    //
     builder
         .custom_embedding_model("avsolatorio/GIST-small-Embedding-v0")
         .custom_model_revision("d6c4190");
 
     // Will use the first available CUDA device (Default)
+    //
     builder.with_device_any_cuda();
 
     // Use a specific CUDA device failing
+    //
     builder.with_device_specific_cuda(ordinal: usize);
 
     // Use CPU (CUDA options fail over to this)
+    //
     builder.with_device_cpu();
 
     // Build the embedder
+    //
     let mut cembed = builder.build()?;
     
-    // This loads the model and tokenizer into memory
-    // Upon first running 'embed' this function is called
-    // Documenting here for clarity
+    // This loads the model and tokenizer into memory and is ran the first time `embed` is called
+    // So you shouldn't nee to call this, but documenting here for clarity
+    //
     cembed.load();
 
     // Embed a single text
+    //
     let text = "This is a test sentence.";
     let embeddings = cembed.embed_one(text)?;
     
     // Embed a batch of texts
+    //
     let texts = vec![
         "This is the first sentence.",
         "This is the second sentence.",
@@ -80,7 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let batch_embeddings = cembed.embed_batch(texts)?;
     
-    // Unload the model dropping it from memory
+    // Unload the model and tokenizer, dropping them from memory
+    //
     cembed.unload();
     
     Ok(())
@@ -89,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Feature Flags
 
-    cuda: Enables CUDA support for using GPU devices. Requires the candle/cuda, candle/cudnn, and candle_nn/cuda dependencies.
+    cuda: Enables CUDA support for using GPU devices.
     default: No additional features are enabled by default.
 
 License

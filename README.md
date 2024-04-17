@@ -1,8 +1,8 @@
 # CandleEmbed
 
-CandleEmbed is a Rust library for creating embeddings using BERT-based models. It provides a convenient way to load pre-trained models, embed single or multiple texts, and customize the embedding process. It's basically the same code as the [candle example for embeddings]('https://github.com/huggingface/candle/tree/main/candle-examples/examples/bert'), but with a nice wrapper. This exists because I wanted to play with Candle, and [fastembed.rs]('https://github.com/Anush008/fastembed-rs') doesn't support custom models.fs
+CandleEmbed is a Rust library for creating embeddings using BERT-based models. It provides a convenient way to load pre-trained models, embed single or multiple texts, and customize the embedding process. It's basically the same code as the [candle example for embeddings]('https://github.com/huggingface/candle/tree/main/candle-examples/examples/bert'), but with a nice wrapper. This exists because I wanted to play with Candle, and [fastembed.rs]('https://github.com/Anush008/fastembed-rs') doesn't support custom models.
 
-Features
+### Features
 
 - Enums for most popular embedding models OR specify custom models from HF
 
@@ -10,7 +10,7 @@ Features
 
 - Can load and unload as required for better memory management 
 
-Installation
+### Installation
 
 Add the following to your Cargo.toml file:
 
@@ -29,7 +29,7 @@ candle_embed = { version = "0.1.0", features = ["cuda"] }
 Or you can just clone the repo. It's literally just a single file.
 
 
-Usage
+### Usage - Basics
 
 ```rust
 
@@ -40,47 +40,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     let builder = CandleEmbedBuilder::new();
     
-    //
-    // Optional settings 
-    //
-
-    // Customize the builder
-    //
-    let builder = builder
-        .normalize_embeddings(true)
-        .approximate_gelu(true);
-
-    // Set model from preset
-    //
-    builder
-        .set_model_from_presets(WithModel::UaeLargeV1);
-
-    // Or use a custom model and revision
-    //
-    builder
-        .custom_embedding_model("avsolatorio/GIST-small-Embedding-v0")
-        .custom_model_revision("d6c4190");
-
-    // Will use the first available CUDA device (Default)
-    //
-    builder.with_device_any_cuda();
-
-    // Use a specific CUDA device failing
-    //
-    builder.with_device_specific_cuda(ordinal: usize);
-
-    // Use CPU (CUDA options fail over to this)
-    //
-    builder.with_device_cpu();
 
     // Build the embedder
     //
     let mut cembed = builder.build()?;
     
-    // This loads the model and tokenizer into memory and is ran the first time `embed` is called
-    // So you shouldn't nee to call this, but documenting here for clarity
-    //
-    cembed.load();
 
     // Embed a single text
     //
@@ -104,14 +68,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Feature Flags
+### Usage - Custom
+
+```rust
+    // ---
+
+    let builder = CandleEmbedBuilder::new();
+   
+    // Embedding settings
+    //
+    let builder = builder
+        .normalize_embeddings(true)
+        .approximate_gelu(true);
+
+    // Set model from preset
+    //
+    builder
+        .set_model_from_presets(WithModel::UaeLargeV1);
+
+    // Or use a custom model and revision
+    //
+    builder
+        .custom_embedding_model("avsolatorio/GIST-small-Embedding-v0")
+        .custom_model_revision("d6c4190");
+
+    // Will use the first available CUDA device (Default)
+    //
+    builder.with_device_any_cuda(ordinal: usize);
+
+    // Use a specific CUDA device failing
+    //
+    builder.with_device_specific_cuda(ordinal: usize);
+
+    // Use CPU (CUDA options fail over to this)
+    //
+    builder.with_device_cpu();
+
+    // Build the embedder
+    //
+    let mut cembed = builder.build()?;
+    
+    // This loads the model and tokenizer into memory 
+    // and is ran the first time `embed` is called
+    // You shouldn't need to call this
+    //
+    cembed.load();
+
+    // Get the dimensions from the model currently loaded
+    //
+    let dimensions = cembed.dimensions;
+
+    // ---
+```
+
+### Feature Flags
 
     cuda: Enables CUDA support for using GPU devices.
-    default: No additional features are enabled by default.
 
-License
+### License
 
 This project is licensed under the MIT License.
-Contributing
 
-Contributions are welcome! Please feel free to submit a pull request or open an issue if you have any suggestions or find any bugs.
+### Contributing
+
+My motivation for publishing is for someone to point out if I'm doing something wrong!

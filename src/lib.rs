@@ -5,8 +5,12 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 pub use models::WithModel;
-use std::panic::{self, AssertUnwindSafe};
+use std::{
+    cell::RefCell,
+    panic::{self, AssertUnwindSafe},
+};
 use tokenizers::{PaddingParams, Tokenizer};
+
 pub enum WithDevice {
     AnyCudaDevice,
     SpecificCudaDevice(usize),
@@ -164,13 +168,13 @@ impl CandleEmbedBuilder {
         }
         Ok(BasedBertEmbedder {
             config,
-            embedding_model_dimensions: hidden_size,
-            embedding_model_id: self.embedding_model,
-            embedding_model_revision: model_revision,
-            model: None,
+            embed_model_dimensions: hidden_size,
+            embed_model_id: self.embedding_model,
+            embed_model_rev: model_revision,
+            model: RefCell::new(None), // Fix: Wrap None in a RefCell
             normalize_embeddings: self.noramlize_embeddings,
             tokenizer_filename,
-            tokenizer: None,
+            tokenizer: RefCell::new(None), // Fix: Wrap None in a RefCell
             weights_filename,
             with_device: self.with_device,
         })
@@ -183,13 +187,13 @@ impl CandleEmbedBuilder {
 /// It is initialized with the [CandleEmbedBuilder] struct.
 pub struct BasedBertEmbedder {
     config: Config,
-    pub embedding_model_id: WithModel,
-    pub embedding_model_revision: String,
-    model: Option<BertModel>,
+    pub embed_model_id: WithModel,
+    pub embed_model_rev: String,
+    model: RefCell<Option<BertModel>>,
     normalize_embeddings: bool,
-    pub embedding_model_dimensions: usize,
+    pub embed_model_dimensions: usize,
     tokenizer_filename: std::path::PathBuf,
-    tokenizer: Option<Tokenizer>,
+    tokenizer: RefCell<Option<Tokenizer>>,
     weights_filename: std::path::PathBuf,
     with_device: WithDevice,
 }
@@ -201,21 +205,23 @@ impl BasedBertEmbedder {
     ///
     /// Returns `Ok(())` if the loading is successful, or an error wrapped in a `Box<dyn std::error::Error>`
     /// if an error occurs during loading.
-    pub fn load(&mut self) -> R<()> {
+    pub fn load(&self) -> R<()> {
         let device = self.init_device()?;
         let weights_filename = self.weights_filename.clone(); // Clone the weights_filename
         let vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
-        self.tokenizer =
+
+        *self.tokenizer.borrow_mut() =
             Some(Tokenizer::from_file(self.tokenizer_filename.clone()).map_err(E::msg)?);
-        self.model = Some(BertModel::load(vb, &self.config)?);
+        *self.model.borrow_mut() = Some(BertModel::load(vb, &self.config)?);
+
         Ok(())
     }
 
     /// Unloads the BERT model and tokenizer, freeing up memory.
-    pub fn unload(&mut self) {
-        self.model = None;
-        self.tokenizer = None;
+    pub fn unload(&self) {
+        *self.model.borrow_mut() = None;
+        *self.tokenizer.borrow_mut() = None;
     }
 
     fn init_device(&self) -> R<Device> {
@@ -266,7 +272,7 @@ impl BasedBertEmbedder {
     ///
     /// Returns a `Result` containing a vector of floats representing the embedding,
     /// or an error wrapped in a `Box<dyn std::error::Error>` if an error occurs.
-    pub fn embed_one(&mut self, text: &str) -> R<Vec<f32>> {
+    pub fn embed_one(&self, text: &str) -> R<Vec<f32>> {
         self.embed_batch(vec![text])
             .map(|v| v.into_iter().next().unwrap())
     }
@@ -282,20 +288,24 @@ impl BasedBertEmbedder {
     /// Returns a `Result` containing a vector of vectors of floats, where each inner vector
     /// represents the embedding for a single text in the batch. If an error occurs, an error
     /// wrapped in a `Box<dyn std::error::Error>` is returned.
-    pub fn embed_batch(&mut self, texts: Vec<&str>) -> R<Vec<Vec<f32>>> {
-        if self.model.is_none() || self.tokenizer.is_none() {
+    pub fn embed_batch(&self, texts: Vec<&str>) -> R<Vec<Vec<f32>>> {
+        if self.model.borrow().is_none() || self.tokenizer.borrow().is_none() {
             self.load()?;
         }
-        let model = if let Some(model) = &self.model {
+
+        let model = self.model.borrow();
+        let model = if let Some(model) = model.as_ref() {
             model
         } else {
             panic!("Model did not load")
         };
-        let mut tokenizer = if let Some(tokenizer) = &self.tokenizer {
-            tokenizer.clone()
+        let mut tokenizer = self.tokenizer.borrow_mut();
+        let tokenizer = if let Some(tokenizer) = tokenizer.as_mut() {
+            tokenizer
         } else {
             panic!("Tokenizer did not load")
         };
+
         let device = &model.device;
 
         if let Some(pp) = tokenizer.get_padding_mut() {
@@ -343,11 +353,14 @@ mod tests {
     #[test]
     fn test_build_default_embed() -> R<()> {
         let builder = CandleEmbedBuilder::new();
-        let mut cembed = builder.build()?;
-        assert_eq!(cembed.embedding_model_dimensions, 1024);
-        assert!(cembed.normalize_embeddings);
-        assert!(matches!(cembed.with_device, WithDevice::AnyCudaDevice));
-        cembed.unload();
+        let mut candle_embed = builder.build()?;
+        assert_eq!(candle_embed.embed_model_dimensions, 1024);
+        assert!(candle_embed.normalize_embeddings);
+        assert!(matches!(
+            candle_embed.with_device,
+            WithDevice::AnyCudaDevice
+        ));
+        candle_embed.unload();
         Ok(())
     }
 
@@ -359,38 +372,41 @@ mod tests {
             .approximate_gelu(false)
             .normalize_embeddings(false)
             .with_device_cpu();
-        let mut cembed = builder.build()?;
-        assert_eq!(cembed.embedding_model_dimensions, 384);
-        assert!(!cembed.normalize_embeddings);
-        assert!(matches!(cembed.with_device, WithDevice::Cpu));
-        cembed.unload();
+        let mut candle_embed = builder.build()?;
+        assert_eq!(candle_embed.embed_model_dimensions, 384);
+        assert!(!candle_embed.normalize_embeddings);
+        assert!(matches!(candle_embed.with_device, WithDevice::Cpu));
+        candle_embed.unload();
         Ok(())
     }
 
     #[test]
     fn test_create_embeddings() -> R<()> {
         let builder = CandleEmbedBuilder::new();
-        let mut cembed = builder.build()?;
+        let mut candle_embed = builder.build()?;
         let text = "This is a test sentence.";
-        let embeddings = cembed.embed_one(text)?;
-        assert_eq!(embeddings.len(), cembed.embedding_model_dimensions);
-        cembed.unload();
+        let embeddings = candle_embed.embed_one(text)?;
+        assert_eq!(embeddings.len(), candle_embed.embed_model_dimensions);
+        candle_embed.unload();
         Ok(())
     }
 
     #[test]
     fn test_create_batch_embeddings() -> R<()> {
         let builder = CandleEmbedBuilder::new();
-        let mut cembed = builder.build()?;
+        let mut candle_embed = builder.build()?;
         let texts = vec![
             "This is the first sentence.",
             "This is the second sentence.",
             "This is the third sentence.",
         ];
-        let batch_embeddings = cembed.embed_batch(texts)?;
+        let batch_embeddings = candle_embed.embed_batch(texts)?;
         assert_eq!(batch_embeddings.len(), 3);
-        assert_eq!(batch_embeddings[0].len(), cembed.embedding_model_dimensions);
-        cembed.unload();
+        assert_eq!(
+            batch_embeddings[0].len(),
+            candle_embed.embed_model_dimensions
+        );
+        candle_embed.unload();
         Ok(())
     }
 }

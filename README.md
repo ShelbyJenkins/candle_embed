@@ -43,13 +43,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the embedder
     //
-    let mut cembed = builder.build()?;
+    let mut candle_embed = builder.build()?;
     
 
     // Embed a single text
     //
     let text = "This is a test sentence.";
-    let embeddings = cembed.embed_one(text)?;
+    let embeddings = candle_embed.embed_one(text)?;
     
     // Embed a batch of texts
     //
@@ -58,11 +58,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "This is the second sentence.",
         "This is the third sentence.",
     ];
-    let batch_embeddings = cembed.embed_batch(texts)?;
+    let batch_embeddings = candle_embed.embed_batch(texts)?;
     
     // Unload the model and tokenizer, dropping them from memory
     //
-    cembed.unload();
+    candle_embed.unload();
     
     Ok(())
 }
@@ -106,17 +106,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build the embedder
     //
-    let mut cembed = builder.build()?;
+    let mut candle_embed = builder.build()?;
     
     // This loads the model and tokenizer into memory 
     // and is ran the first time `embed` is called
     // You shouldn't need to call this
     //
-    cembed.load();
+    candle_embed.load();
 
     // Get the dimensions from the model currently loaded
     //
-    let dimensions = cembed.dimensions;
+    let dimensions = candle_embed.dimensions;
 
     // ---
 ```

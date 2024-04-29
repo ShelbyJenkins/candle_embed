@@ -2,8 +2,10 @@
 categories=[
     "cuda",
     "embeddings",
-    "hugging-face",
-    "vector-embeddings",
+    "huggingface",
+    "retrieval",
+    "search",
+    "semantic",
     "vectors",
 ]
 description="A simple, CUDA or CPU powered, library for creating vector embeddings using Candle and models from Hugging Face"
@@ -12,8 +14,10 @@ homepage="https://github.com/shelbyJenkins/candle_embed"
 keywords=[
     "cuda",
     "embeddings",
-    "hugging-face",
-    "vector-embeddings",
+    "huggingface",
+    "retrieval",
+    "search",
+    "semantic",
     "vectors",
 ]
 license="MIT"

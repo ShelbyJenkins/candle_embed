@@ -8,7 +8,7 @@ license="MIT"
 name="candle_embed"
 readme="README.md"
 repository="https://github.com/shelbyJenkins/candle_embed"
-version="0.1.1"
+version="0.1.2"
 
 [dependencies]
 anyhow="1.0.82"

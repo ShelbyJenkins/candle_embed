@@ -19,12 +19,13 @@ pub enum WithDevice {
 
 /// `CandleEmbedBuilder` is a builder struct for configuring and creating a `BasedBertEmbedder` instance.
 pub struct CandleEmbedBuilder {
-    pub embedding_model: WithModel,
-    pub model_revision: String,
     pub approximate_gelu: bool,
-    pub noramlize_embeddings: bool,
-    pub with_device: WithDevice,
+    pub embedding_model: WithModel,
     pub mean_pooling: bool,
+    pub model_revision: String,
+    pub noramlize_embeddings: bool,
+    pub truncate_text_len_overflow: bool,
+    pub with_device: WithDevice,
 }
 
 impl Default for CandleEmbedBuilder {
@@ -36,23 +37,21 @@ impl CandleEmbedBuilder {
     /// Creates a new instance of `CandleEmbedBuilder` with default configuration
     pub fn new() -> Self {
         Self {
-            embedding_model: WithModel::Default,
-            model_revision: "main".to_string(),
             approximate_gelu: false,
-            noramlize_embeddings: true,
+            embedding_model: WithModel::Default,
             mean_pooling: true,
+            model_revision: "main".to_string(),
+            noramlize_embeddings: false,
+            truncate_text_len_overflow: true,
             with_device: WithDevice::AnyCudaDevice,
         }
     }
-    /// Sets the embedding model from predefined presets.
+    /// Sets the embedding model from predefined presets using the WithModel enum.
     ///
     /// # Arguments
     ///
     /// * `model` - The preset embedding model to use.
     ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn set_model_from_presets(mut self, model: WithModel) -> Self {
         self.embedding_model = model;
         self
@@ -61,72 +60,51 @@ impl CandleEmbedBuilder {
     ///
     /// # Arguments
     ///
-    /// * `embedding_model` - The ID or name of the custom embedding model.
+    /// * `embedding_model` - The repo name and the model name to use. See `src/models.rs` for syntax
     ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn custom_embedding_model(mut self, embedding_model: &str) -> Self {
         self.embedding_model = WithModel::Custom(embedding_model.to_string());
         self
     }
-    /// Sets a custom model revision.
+    /// Sets a custom model revision. Default is "main".
     ///
-    /// # Arguments
-    ///
-    /// * `model_revision` - The revision of the model to use.
-    ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn custom_model_revision(mut self, model_revision: &str) -> Self {
         self.model_revision = model_revision.to_string();
         self
     }
     /// Specifies whether to use approximate GeLU activation function.
     ///
-    /// # Arguments
-    ///
-    /// * `approximate_gelu` - A boolean indicating whether to use approximate GeLU.
-    ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn approximate_gelu(mut self, approximate_gelu: bool) -> Self {
         self.approximate_gelu = approximate_gelu;
         self
     }
     /// Specifies whether to normalize the embeddings.
     ///
-    /// # Arguments
-    ///
-    /// * `normalize_embeddings` - A boolean indicating whether to normalize the embeddings.
-    ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn normalize_embeddings(mut self, normalize_embeddings: bool) -> Self {
         self.noramlize_embeddings = normalize_embeddings;
         self
     }
+    /// Specifies whether to apply mean pooling to the embeddings. Otherwise, only the CLS token is used.
+    ///
     pub fn mean_pooling(mut self, mean_pooling: bool) -> Self {
         self.mean_pooling = mean_pooling;
         self
     }
+    /// Specifies whether to truncate the text length if it exceeds the maximum input size. Defaults to true.
+    ///
+    pub fn truncate_text_len_overflow(mut self, truncate_text_len_overflow: bool) -> Self {
+        self.truncate_text_len_overflow = truncate_text_len_overflow;
+        self
+    }
     /// Specifies to use the CPU as the device for the model.
     ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn with_device_cpu(mut self) -> Self {
         self.with_device = WithDevice::Cpu;
         self
     }
-    /// Specifies to use any available CUDA device for the model.
+    /// Specifies to use any available CUDA device for the model. It tries ordinals one through six and uses the first available.
+    /// If CUDA is not available, it falls back to the CPU.
     ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn with_device_any_cuda(mut self) -> Self {
         self.with_device = WithDevice::AnyCudaDevice;
         self
@@ -137,18 +115,12 @@ impl CandleEmbedBuilder {
     ///
     /// * `ordinal` - The ordinal number of the CUDA device to use.
     ///
-    /// # Returns
-    ///
-    /// Returns the updated `CandleEmbedBuilder` instance.
     pub fn with_device_specific_cuda(mut self, ordinal: usize) -> Self {
         self.with_device = WithDevice::SpecificCudaDevice(ordinal);
         self
     }
     /// Builds and returns a `BasedBertEmbedder` instance based on the configured settings.
     ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing the created `BasedBertEmbedder` instance, or an error if the build fails.
     pub fn build(self) -> Result<BasedBertEmbedder> {
         let model_id = self.embedding_model.get_model_id_string();
         let model_revision = self.model_revision;
@@ -181,16 +153,17 @@ impl CandleEmbedBuilder {
         Ok(BasedBertEmbedder {
             config,
             embed_model_dimensions: hidden_size,
-            embed_model_max_input: max_position_embeddings,
             embed_model_id: self.embedding_model,
+            embed_model_max_input: max_position_embeddings,
             embed_model_rev: model_revision,
+            mean_pooling: self.mean_pooling,
             model: RefCell::new(None), // Fix: Wrap None in a RefCell
             normalize_embeddings: self.noramlize_embeddings,
             tokenizer_filename,
             tokenizer: RefCell::new(None), // Fix: Wrap None in a RefCell
+            truncate_text_len_overflow: self.truncate_text_len_overflow,
             weights_filename,
             with_device: self.with_device,
-            mean_pooling: self.mean_pooling,
         })
     }
 }
@@ -201,26 +174,23 @@ impl CandleEmbedBuilder {
 /// It is initialized with the [CandleEmbedBuilder] struct.
 pub struct BasedBertEmbedder {
     config: Config,
-    pub embed_model_id: WithModel,
-    pub embed_model_rev: String,
+    mean_pooling: bool,
     model: RefCell<Option<BertModel>>,
     normalize_embeddings: bool,
-    mean_pooling: bool,
     pub embed_model_dimensions: usize,
+    pub embed_model_id: WithModel,
     pub embed_model_max_input: usize,
+    pub embed_model_rev: String,
     tokenizer_filename: std::path::PathBuf,
     tokenizer: RefCell<Option<Tokenizer>>,
+    truncate_text_len_overflow: bool,
     weights_filename: std::path::PathBuf,
     with_device: WithDevice,
 }
 
 impl BasedBertEmbedder {
-    /// Loads the BERT model and tokenizer.
+    /// Loads the tokenizer.
     ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the loading is successful, or an error wrapped in a `Box<dyn std::error::Error>`
-    /// if an error occurs during loading.
     pub fn load_tokenizer(&self) -> Result<()> {
         *self.tokenizer.borrow_mut() =
             Some(Tokenizer::from_file(self.tokenizer_filename.clone()).map_err(Error::msg)?);
@@ -230,10 +200,6 @@ impl BasedBertEmbedder {
 
     /// Loads the BERT model.
     ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the loading is successful, or an error wrapped in a `Box<dyn std::error::Error>`
-    /// if an error occurs during loading.
     pub fn load_model(&self) -> Result<()> {
         let device = self.init_device()?;
         let weights_filename = self.weights_filename.clone(); // Clone the weights_filename
@@ -243,7 +209,8 @@ impl BasedBertEmbedder {
         Ok(())
     }
 
-    /// Unloads the BERT model and tokenizer, freeing up memory.
+    /// Unloads the BERT model and tokenizer, freeing up memory. Call this when you are done using the model.
+    ///
     pub fn unload(&self) {
         *self.model.borrow_mut() = None;
         *self.tokenizer.borrow_mut() = None;
@@ -251,9 +218,6 @@ impl BasedBertEmbedder {
 
     /// Initializes the device for model loading.
     ///
-    /// # Returns
-    ///
-    /// Returns the initialized device.
     fn init_device(&self) -> Result<Device> {
         if let WithDevice::Cpu = self.with_device {
             return Ok(Device::Cpu);
@@ -294,15 +258,6 @@ impl BasedBertEmbedder {
 
     /// Embeds a batch of texts using the loaded BERT model.
     ///
-    /// # Arguments
-    ///
-    /// * `texts` - A vector of texts to embed.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a vector of vectors of floats, where each inner vector
-    /// represents the embedding for a single text in the batch. If an error occurs, an error
-    /// wrapped in a `Box<dyn std::error::Error>` is returned.
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Err(Error::msg(
@@ -319,14 +274,6 @@ impl BasedBertEmbedder {
 
     /// Embeds a single text using the loaded BERT model.
     ///
-    /// # Arguments
-    ///
-    /// * `text` - The text to embed.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a vector of floats representing the embedding,
-    /// or an error wrapped in a `Box<dyn std::error::Error>` if an error occurs.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
         if text.is_empty() {
             return Err(Error::msg(
@@ -334,18 +281,13 @@ impl BasedBertEmbedder {
             ));
         }
 
-        let encoding = self.encode_texts(&[text])?;
+        let token_count = self.token_count(text)?;
 
-        if encoding[0].len() > self.embed_model_max_input {
+        if token_count > self.embed_model_max_input {
             return Err(Error::msg(format!(
                 "CandleEmbed error: Text input size of {} exceeds maximum input size of {}",
-                encoding[0].len(),
-                self.embed_model_max_input
+                token_count, self.embed_model_max_input
             )));
-        }
-
-        if self.tokenizer.borrow().is_none() {
-            self.load_tokenizer()?;
         }
 
         if self.model.borrow().is_none() {
@@ -359,20 +301,9 @@ impl BasedBertEmbedder {
             panic!("Model did not load")
         };
 
-        let mut tokenizer = self.tokenizer.borrow_mut();
-        let tokenizer = if let Some(tokenizer) = tokenizer.as_mut() {
-            tokenizer
-        } else {
-            panic!("Tokenizer did not load")
-        };
-
         let device = &model.device;
-
-        let tokens = tokenizer
-            .encode(text, true)
-            .map_err(Error::msg)?
-            .get_ids()
-            .to_vec();
+        let encoding = self.encode_text(text, true)?;
+        let tokens = encoding.get_ids().to_vec();
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
 
@@ -397,60 +328,87 @@ impl BasedBertEmbedder {
         Ok(embedding.i(0)?.to_vec1::<f32>()?)
     }
 
+    /// Counts the number of tokens in a single text using the loaded tokenizer.
+    ///
     pub fn token_count(&self, text: &str) -> Result<usize> {
-        let encoding = self.encode_texts(&[text])?;
-        Ok(encoding[0].len())
+        let encoding = self.encode_text(text, false)?;
+        Ok(encoding.get_tokens().len())
+    }
+    /// Counts the number of tokens in a batch of texts using the loaded tokenizer.
+    ///
+    pub fn token_count_batch(&self, texts: &[&str]) -> Result<Vec<usize>> {
+        let encodings = self.encode_texts(texts, false)?;
+        Ok(encodings
+            .iter()
+            .map(|encoding| encoding.get_tokens().len())
+            .collect())
     }
     /// Tokenizes a single text using the loaded tokenizer.
     ///
-    /// # Arguments
-    ///
-    /// * `text` - The text to tokenize.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a vector of strings representing the tokens,
-    /// or an error wrapped in a `Box<dyn std::error::Error>` if an error occurs.
     pub fn tokenize_one(&self, text: &str) -> Result<Vec<String>> {
-        self.tokenize_batch(&[text])
-            .map(|v| v.into_iter().next().unwrap())
+        if text.is_empty() {
+            return Err(Error::msg(
+                "CandleEmbed error: tokenize_one called with empty text",
+            ));
+        }
+        let encoding = self.encode_text(text, false)?;
+        let token_string = encoding.get_tokens().to_vec();
+        Ok(token_string)
     }
-
     /// Tokenizes a batch of texts using the loaded tokenizer.
     ///
-    /// # Arguments
-    ///
-    /// * `texts` - An array of texts to tokenize.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a vector of vectors of strings, where each inner vector
-
     pub fn tokenize_batch(&self, texts: &[&str]) -> Result<Vec<Vec<String>>> {
         if texts.is_empty() {
             return Err(Error::msg(
                 "CandleEmbed error: tokenize_batch called with empty texts",
             ));
         }
-        let encodings = self.encode_texts(texts)?;
+        let encodings = self.encode_texts(texts, false)?;
         let token_strings = encodings
             .iter()
             .map(|encoding| encoding.get_tokens().to_vec())
             .collect::<Vec<_>>();
         Ok(token_strings)
     }
-
-    /// Encodes a batch of texts using the loaded tokenizer. Use for the tokenizer functions and for pre-checking the input size. It is not used to generate embeddings.
+    /// Encodes a batch of texts using the loaded tokenizer. Used for the tokenizer functions and for pre-checking the input size. It is not used to generate embeddings.
     ///
-    /// # Arguments
+    fn encode_text(&self, text: &str, with_trunc_settings: bool) -> Result<Encoding> {
+        if text.is_empty() {
+            return Err(Error::msg(
+                "CandleEmbed error: encode_text called with an empty input text",
+            ));
+        }
+        if self.tokenizer.borrow().is_none() {
+            self.load_tokenizer()?;
+        }
+        let mut tokenizer = self.tokenizer.borrow_mut();
+        let tokenizer = if let Some(tokenizer) = tokenizer.as_mut() {
+            tokenizer
+        } else {
+            panic!("Tokenizer did not load")
+        };
+        let tokenizer = if with_trunc_settings && self.truncate_text_len_overflow {
+            tokenizer
+                .with_padding(None)
+                .with_truncation(Some(tokenizers::TruncationParams {
+                    max_length: self.embed_model_max_input,
+                    ..Default::default()
+                }))
+                .map_err(anyhow::Error::msg)?
+                .clone()
+        } else {
+            tokenizer
+                .with_padding(None)
+                .with_truncation(None)
+                .map_err(anyhow::Error::msg)?
+                .clone()
+        };
+        let encoding: tokenizers::Encoding = tokenizer.encode(text, true).map_err(Error::msg)?;
+        Ok(encoding)
+    }
+    /// Encodes a batch of texts using the loaded tokenizer. Used for the tokenizer functions and for pre-checking the input size. It is not used to generate embeddings.
     ///
-    /// * `texts` - An array of texts to encode.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing a vector of `Encoding` objects, where each `Encoding`
-    /// represents the encoding for a single text in the batch.
-    fn encode_texts(&self, texts: &[&str]) -> Result<Vec<Encoding>> {
+    fn encode_texts(&self, texts: &[&str], with_trunc_settings: bool) -> Result<Vec<Encoding>> {
         if texts.iter().any(|text| text.is_empty()) {
             return Err(Error::msg(
                 "CandleEmbed error: encode_texts called with an empty input text",
@@ -465,7 +423,22 @@ impl BasedBertEmbedder {
         } else {
             panic!("Tokenizer did not load")
         };
-        tokenizer.with_padding(None);
+        let tokenizer = if with_trunc_settings && self.truncate_text_len_overflow {
+            tokenizer
+                .with_padding(None)
+                .with_truncation(Some(tokenizers::TruncationParams {
+                    max_length: self.embed_model_max_input,
+                    ..Default::default()
+                }))
+                .map_err(anyhow::Error::msg)?
+                .clone()
+        } else {
+            tokenizer
+                .with_padding(None)
+                .with_truncation(None)
+                .map_err(anyhow::Error::msg)?
+                .clone()
+        };
         let encodings: Vec<tokenizers::Encoding> = tokenizer
             .encode_batch(texts.to_vec(), true)
             .map_err(Error::msg)?;
@@ -482,7 +455,9 @@ mod tests {
         let candle_embed = CandleEmbedBuilder::new().build()?;
         assert_eq!(candle_embed.embed_model_dimensions, 1024);
         assert_eq!(candle_embed.embed_model_max_input, 512);
-        assert!(candle_embed.normalize_embeddings);
+        assert!(!candle_embed.normalize_embeddings);
+        assert!(candle_embed.mean_pooling);
+        assert!(candle_embed.truncate_text_len_overflow);
         assert!(matches!(
             candle_embed.with_device,
             WithDevice::AnyCudaDevice
@@ -537,7 +512,7 @@ mod tests {
 
     #[test]
     fn batch_embeddings_where_text_at_max_input_size() -> Result<()> {
-        let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
+        let candle_embed = CandleEmbedBuilder::new().build()?;
 
         let overly_long_string = (0..candle_embed.embed_model_max_input - 2)
             .map(|_| "a")
@@ -561,9 +536,9 @@ mod tests {
 
     #[test]
     fn batch_embeddings_where_text_exceeds_max_input_size() -> Result<()> {
-        let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
+        let candle_embed = CandleEmbedBuilder::new().build()?;
 
-        let overly_long_string = (0..candle_embed.embed_model_max_input + 1)
+        let overly_long_string = (0..candle_embed.embed_model_max_input)
             .map(|_| "a")
             .collect::<Vec<_>>()
             .join(" ");
@@ -577,7 +552,7 @@ mod tests {
             Err(e) => {
                 assert_eq!(
                     e.to_string(),
-                    format!("CandleEmbed error: Text input size of 515 exceeds maximum input size of {}",candle_embed.embed_model_max_input)
+                    format!("CandleEmbed error: Text input size of 514 exceeds maximum input size of {}",candle_embed.embed_model_max_input)
                 );
             }
             Ok(_) => panic!("Expected error"),
@@ -588,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_tokens() -> Result<()> {
+    fn tokenize_text() -> Result<()> {
         let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
 
         let texts = vec![
@@ -599,6 +574,28 @@ mod tests {
         let batch_tokens = candle_embed.tokenize_batch(&texts)?;
         assert_eq!(batch_tokens.len(), 3);
 
+        let text = "This is the first sentence.";
+        let tokens = candle_embed.tokenize_one(text)?;
+        assert!(!tokens.is_empty());
+        candle_embed.unload();
+        Ok(())
+    }
+
+    #[test]
+    fn token_count() -> Result<()> {
+        let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
+
+        let texts = vec![
+            "This is the first sentence.",
+            "This is the second sentence.",
+            "This is the third sentence.",
+        ];
+        let batch_tokens = candle_embed.token_count_batch(&texts)?;
+        assert_eq!(batch_tokens.len(), 3);
+
+        let text = "This is the first sentence.";
+        let tokens = candle_embed.token_count(text)?;
+        assert!(tokens > 0);
         candle_embed.unload();
         Ok(())
     }

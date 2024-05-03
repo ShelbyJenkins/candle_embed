@@ -152,15 +152,15 @@ impl CandleEmbedBuilder {
         }
         Ok(BasedBertEmbedder {
             config,
-            embed_model_dimensions: hidden_size,
-            embed_model_id: self.embedding_model,
-            embed_model_max_input: max_position_embeddings,
-            embed_model_rev: model_revision,
+            model_dimensions: hidden_size,
+            model_id: self.embedding_model,
+            model_max_input: max_position_embeddings,
+            model_rev: model_revision,
             mean_pooling: self.mean_pooling,
-            model: RefCell::new(None), // Fix: Wrap None in a RefCell
+            model: RefCell::new(None),
             normalize_embeddings: self.noramlize_embeddings,
             tokenizer_filename,
-            tokenizer: RefCell::new(None), // Fix: Wrap None in a RefCell
+            tokenizer: RefCell::new(None),
             truncate_text_len_overflow: self.truncate_text_len_overflow,
             weights_filename,
             with_device: self.with_device,
@@ -177,10 +177,10 @@ pub struct BasedBertEmbedder {
     mean_pooling: bool,
     model: RefCell<Option<BertModel>>,
     normalize_embeddings: bool,
-    pub embed_model_dimensions: usize,
-    pub embed_model_id: WithModel,
-    pub embed_model_max_input: usize,
-    pub embed_model_rev: String,
+    pub model_dimensions: usize,
+    pub model_id: WithModel,
+    pub model_max_input: usize,
+    pub model_rev: String,
     tokenizer_filename: std::path::PathBuf,
     tokenizer: RefCell<Option<Tokenizer>>,
     truncate_text_len_overflow: bool,
@@ -281,13 +281,14 @@ impl BasedBertEmbedder {
             ));
         }
 
-        let token_count = self.token_count(text)?;
-
-        if token_count > self.embed_model_max_input {
-            return Err(Error::msg(format!(
-                "CandleEmbed error: Text input size of {} exceeds maximum input size of {}",
-                token_count, self.embed_model_max_input
-            )));
+        if !self.truncate_text_len_overflow {
+            let token_count = self.token_count(text)?;
+            if token_count > self.model_max_input {
+                return Err(Error::msg(format!(
+                    "CandleEmbed error: Text input size of {} exceeds maximum input size of {}",
+                    token_count, self.model_max_input
+                )));
+            }
         }
 
         if self.model.borrow().is_none() {
@@ -391,7 +392,7 @@ impl BasedBertEmbedder {
             tokenizer
                 .with_padding(None)
                 .with_truncation(Some(tokenizers::TruncationParams {
-                    max_length: self.embed_model_max_input,
+                    max_length: self.model_max_input,
                     ..Default::default()
                 }))
                 .map_err(anyhow::Error::msg)?
@@ -427,7 +428,7 @@ impl BasedBertEmbedder {
             tokenizer
                 .with_padding(None)
                 .with_truncation(Some(tokenizers::TruncationParams {
-                    max_length: self.embed_model_max_input,
+                    max_length: self.model_max_input,
                     ..Default::default()
                 }))
                 .map_err(anyhow::Error::msg)?
@@ -453,8 +454,8 @@ mod tests {
     #[test]
     fn build_default_embed() -> Result<()> {
         let candle_embed = CandleEmbedBuilder::new().build()?;
-        assert_eq!(candle_embed.embed_model_dimensions, 1024);
-        assert_eq!(candle_embed.embed_model_max_input, 512);
+        assert_eq!(candle_embed.model_dimensions, 1024);
+        assert_eq!(candle_embed.model_max_input, 512);
         assert!(!candle_embed.normalize_embeddings);
         assert!(candle_embed.mean_pooling);
         assert!(candle_embed.truncate_text_len_overflow);
@@ -475,7 +476,7 @@ mod tests {
             .normalize_embeddings(false)
             .with_device_cpu()
             .build()?;
-        assert_eq!(candle_embed.embed_model_dimensions, 384);
+        assert_eq!(candle_embed.model_dimensions, 384);
         assert!(!candle_embed.normalize_embeddings);
         assert!(matches!(candle_embed.with_device, WithDevice::Cpu));
         candle_embed.unload();
@@ -487,7 +488,7 @@ mod tests {
         let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
         let text = "This is a test sentence ok dog?";
         let embeddings = candle_embed.embed_one(text)?;
-        assert_eq!(embeddings.len(), candle_embed.embed_model_dimensions);
+        assert_eq!(embeddings.len(), candle_embed.model_dimensions);
         candle_embed.unload();
         Ok(())
     }
@@ -502,19 +503,19 @@ mod tests {
         ];
         let batch_embeddings = candle_embed.embed_batch(&texts)?;
         assert_eq!(batch_embeddings.len(), 3);
-        assert_eq!(
-            batch_embeddings[0].len(),
-            candle_embed.embed_model_dimensions
-        );
+        assert_eq!(batch_embeddings[0].len(), candle_embed.model_dimensions);
         candle_embed.unload();
         Ok(())
     }
 
     #[test]
-    fn batch_embeddings_where_text_at_max_input_size() -> Result<()> {
-        let candle_embed = CandleEmbedBuilder::new().build()?;
+    fn exceeds_max_input_size() -> Result<()> {
+        let candle_embed = CandleEmbedBuilder::new()
+            .truncate_text_len_overflow(false)
+            .build()?;
 
-        let overly_long_string = (0..candle_embed.embed_model_max_input - 2)
+        // Should pass
+        let overly_long_string = (0..candle_embed.model_max_input - 2)
             .map(|_| "a")
             .collect::<Vec<_>>()
             .join(" ");
@@ -526,19 +527,10 @@ mod tests {
 
         let batch_embeddings = candle_embed.embed_batch(&texts)?;
         assert_eq!(batch_embeddings.len(), 3);
-        assert_eq!(
-            batch_embeddings[0].len(),
-            candle_embed.embed_model_dimensions
-        );
-        candle_embed.unload();
-        Ok(())
-    }
+        assert_eq!(batch_embeddings[0].len(), candle_embed.model_dimensions);
 
-    #[test]
-    fn batch_embeddings_where_text_exceeds_max_input_size() -> Result<()> {
-        let candle_embed = CandleEmbedBuilder::new().build()?;
-
-        let overly_long_string = (0..candle_embed.embed_model_max_input)
+        // Should fail
+        let overly_long_string = (0..candle_embed.model_max_input)
             .map(|_| "a")
             .collect::<Vec<_>>()
             .join(" ");
@@ -552,7 +544,7 @@ mod tests {
             Err(e) => {
                 assert_eq!(
                     e.to_string(),
-                    format!("CandleEmbed error: Text input size of 514 exceeds maximum input size of {}",candle_embed.embed_model_max_input)
+                    format!("CandleEmbed error: Text input size of 514 exceeds maximum input size of {}",candle_embed.model_max_input)
                 );
             }
             Ok(_) => panic!("Expected error"),

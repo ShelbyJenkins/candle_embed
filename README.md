@@ -1,14 +1,14 @@
 # CandleEmbed
 
-CandleEmbed is a Rust library for creating embeddings using BERT-based models. It provides a convenient way to load pre-trained models, embed single or multiple texts, and customize the embedding process. It's basically the same code as the [candle example for embeddings]('https://github.com/huggingface/candle/tree/main/candle-examples/examples/bert'), but with a nice wrapper. This exists because I wanted to play with Candle, and [fastembed.rs]('https://github.com/Anush008/fastembed-rs') doesn't support custom models.
+Embeddings with any model on hugging face. Using CUDA (or much, much slower CPU).
 
 ### Features
 
-- Enums for most popular embedding models OR specify custom models from HF
+- Enums for most popular embedding models OR specify custom models from HF (check out the [leaderboard](https://huggingface.co/spaces/mteb/leaderboard))
 
-- Support for CUDA devices (requires feature flag)
+- GPU support with CUDA
 
-- Can load and unload as required for better memory management 
+- Builder with each access to configuration settings
 
 ### Installation
 
@@ -16,18 +16,11 @@ Add the following to your Cargo.toml file:
 
 ```toml
 [dependencies]
-candle_embed = "0.1.0"
-```
+candle_embed = "*"
 
-If you want to use CUDA devices, enable the cuda feature flag:
-
-```toml
 [dependencies]
-candle_embed = { version = "0.1.0", features = ["cuda"] }
+candle_embed = { version = "*", features = ["cuda"] } // For CUDA support
 ```
-
-Or you can just clone the repo. It's literally just a single file.
-
 
 ### Usage - Basics
 
@@ -38,14 +31,8 @@ use candle_embed::{CandleEmbedBuilder, WithModel};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a builder with default settings
     //
-    let builder = CandleEmbedBuilder::new();
+    let candle_embed = CandleEmbedBuilder::new().build()?;
     
-
-    // Build the embedder
-    //
-    let mut candle_embed = builder.build()?;
-    
-
     // Embed a single text
     //
     let text = "This is a test sentence.";
@@ -60,10 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let batch_embeddings = candle_embed.embed_batch(texts)?;
     
-    // Unload the model and tokenizer, dropping them from memory
-    //
-    candle_embed.unload();
-    
+
     Ok(())
 }
 ```
@@ -71,15 +55,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Usage - Custom
 
 ```rust
-    // ---
-
-    let builder = CandleEmbedBuilder::new();
-   
-    // Embedding settings
+    // Custom settings
     //
-    let builder = builder
-        .normalize_embeddings(true)
-        .approximate_gelu(true);
+    builder
+        .approximate_gelu(false)
+        .mean_pooling(true)
+        .normalize_embeddings(false)
+        .truncate_text_len_overflow(true)
 
     // Set model from preset
     //
@@ -90,40 +72,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     builder
         .custom_embedding_model("avsolatorio/GIST-small-Embedding-v0")
-        .custom_model_revision("d6c4190");
+        .custom_model_revision("d6c4190")
 
     // Will use the first available CUDA device (Default)
     //
-    builder.with_device_any_cuda(ordinal: usize);
+    builder.with_device_any_cuda()
 
-    // Use a specific CUDA device failing
+    // Use a specific CUDA device
     //
     builder.with_device_specific_cuda(ordinal: usize);
 
     // Use CPU (CUDA options fail over to this)
     //
-    builder.with_device_cpu();
+    builder.with_device_cpu()
 
-    // Build the embedder
+    // Unload the model and tokenizer, dropping them from memory
     //
-    let mut candle_embed = builder.build()?;
+    candle_embed.unload();
+
+    // ---
+
+    // These are automatically loaded from the model's `config.json` after builder init
+
+    // model_dimensions
+    // This is the same as "hidden_size"
+    //
+    let dimensions = candle_embed.model_dimensions;
+
+    // model_max_input 
+    // This is the same as "max_position_embeddings"
+    // If `truncate_text_len_overflow == false`, and your input exceeds this a panic will result
+    // If you don't want to worry about this, the default truncation strategy will just chop the end off the input
+    // However, you lose accuracy by mindlessly truncating your inputs
+    //
+    let max_position_embeddings = candle_embed.model_max_input;
     
-    // This loads the model and tokenizer into memory 
-    // and is ran the first time `embed` is called
-    // You shouldn't need to call this
-    //
-    candle_embed.load();
-
-    // Get the dimensions from the model currently loaded
-    //
-    let dimensions = candle_embed.dimensions;
 
     // ---
 ```
 
-### Feature Flags
+### Usage - Tokenization 
 
-    cuda: Enables CUDA support for using GPU devices.
+```rust
+    // Generate tokens using the model
+
+    let texts = vec![
+            "This is the first sentence.",
+            "This is the second sentence.",
+            "This is the third sentence.",
+        ];
+    let text = "This is the first sentence.";
+
+    // Get tokens from a batch of texts
+    //
+    let batch_tokens = candle_embed.tokenize_batch(&texts)?;
+    assert_eq!(batch_tokens.len(), 3);
+    // Get tokens from a single text
+    //
+    let tokens = candle_embed.tokenize_one(text)?;
+    assert!(!tokens.is_empty());
+
+    // Get a count of tokens
+    // This is important to use if you are using your own chunking strategy
+    // For example, using a text splitter on any text string whose token count exceeds candle_embed.model_max_input
+
+    // Get token counts from a batch of texts
+    //
+    let batch_tokens = candle_embed.token_count_batch(&texts)?;
+   
+    // Get token count from a single text
+    //
+    let tokens = candle_embed.token_count(text)?;
+    assert!(tokens > 0);
+```
+
+### How is this differant than fastembed.rs
+
+- Custom models downloaded and ran from hf-hub by entering their `repo_name/model_id`.
+- Truncation strategy in CandleEmbed can be implemented by you.
+- Access to token count and tokenization for implementing chunking. 
+- CandleEmbed uses CUDA. FastEmbed uses ONNX.
+- And finaly.. CandleEmbed uses [Candle](https://github.com/huggingface/candle).
+
+[fastembed.rs]('https://github.com/Anush008/fastembed-rs') is a more established project, and well respected. I recommend you check it out!
+
+### Roadmap
+
+- Multi-GPU support
+- Benchmarking system
 
 ### License
 

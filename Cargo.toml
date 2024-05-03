@@ -1,5 +1,5 @@
 [package]
-categories=["cuda", "embeddings", "huggingface", "search", "vectors"]
+categories=["multimedia::encoding", "science"]
 description="Text embeddings with Candle. Fast and configurable. Use any model from Hugging Face. CUDA or CPU powered."
 edition="2021"
 homepage="https://github.com/shelbyJenkins/candle_embed"

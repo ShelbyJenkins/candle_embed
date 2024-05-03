@@ -28,7 +28,7 @@ candle_embed = { version = "*", features = ["cuda"] } // For CUDA support
 
 use candle_embed::{CandleEmbedBuilder, WithModel};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     // Create a builder with default settings
     //
     let candle_embed = CandleEmbedBuilder::new().build()?;
@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 - Multi-GPU support
 - Benchmarking system
+- Bindings for GO/Python
 
 ### License
 

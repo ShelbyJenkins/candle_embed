@@ -1,6 +1,6 @@
-# CandleEmbed
+# CandleEmbed 🧨
 
-Embeddings with any model on hugging face. Using CUDA (or much, much slower CPU).
+Text embeddings with any model on hugging face. Embedded in your app. Replace your API bill with a GPU.
 
 ### Features
 
@@ -8,7 +8,7 @@ Embeddings with any model on hugging face. Using CUDA (or much, much slower CPU)
 
 - GPU support with CUDA
 
-- Builder with each access to configuration settings
+- Builder with easy access to configuration settings
 
 ### Installation
 
@@ -22,7 +22,7 @@ candle_embed = "*"
 candle_embed = { version = "*", features = ["cuda"] } // For CUDA support
 ```
 
-### Usage - Basics
+### Basics 🫡
 
 ```rust
 
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Usage - Custom
+### Custom 🤓
 
 ```rust
     // Custom settings
@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---
 ```
 
-### Usage - Tokenization 
+### Tokenization 🧮
 
 ```rust
     // Generate tokens using the model
@@ -146,15 +146,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(tokens > 0);
 ```
 
-### How is this differant than fastembed.rs
+### How is this differant than text-embeddings-inference 🤗
 
+- TEI implements a client-server model. This requires running it as it's own external server, a docker container, or locally as a server.
+- CandleEmbed is made to be embedded: it can be installed as a crate and runs in process.
+- TEI is very well optimized and very scalable.
+- CandleEmbed is fast (with a GPU), but was not created for serving at the scale, of say, HuggingFace's text embeddings API.
+
+
+[text-embeddings-inference]('https://github.com/huggingface/text-embeddings-inference') is a more established project, and well respected. I recommend you check it out!
+
+### How is this differant than fastembed.rs 🦀
+
+- Both are usable as a crate!
 - Custom models downloaded and ran from hf-hub by entering their `repo_name/model_id`.
-- Truncation strategy in CandleEmbed can be implemented by you.
-- Access to token count and tokenization for implementing chunking. 
+- CandleEmbed is designed so projects can implement their own truncation and/or chunking strategies. 
 - CandleEmbed uses CUDA. FastEmbed uses ONNX.
 - And finaly.. CandleEmbed uses [Candle](https://github.com/huggingface/candle).
 
 [fastembed.rs]('https://github.com/Anush008/fastembed-rs') is a more established project, and well respected. I recommend you check it out!
+
 
 ### Roadmap
 

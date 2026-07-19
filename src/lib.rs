@@ -3,17 +3,20 @@ use anyhow::{Error, Result};
 use candle::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config, HiddenAct, DTYPE};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::HFClientSync;
 pub use models::WithModel;
 use std::{
     cell::RefCell,
     panic::{self, AssertUnwindSafe},
+    sync::Arc,
 };
 use tokenizers::{Encoding, Tokenizer};
 
+#[derive(Clone)]
 pub enum WithDevice {
     AnyCudaDevice,
     SpecificCudaDevice(usize),
+    Metal,
     Cpu,
 }
 
@@ -119,17 +122,36 @@ impl CandleEmbedBuilder {
         self.with_device = WithDevice::SpecificCudaDevice(ordinal);
         self
     }
+    /// Specifies to use the first Metal device.
+    pub fn with_device_metal(mut self) -> Self {
+        self.with_device = WithDevice::Metal;
+        self
+    }
     /// Builds and returns a `BasedBertEmbedder` instance based on the configured settings.
     ///
     pub fn build(self) -> Result<BasedBertEmbedder> {
         let model_id = self.embedding_model.get_model_id_string();
         let model_revision = self.model_revision;
-        let repo = Repo::with_revision(model_id, RepoType::Model, model_revision.clone());
+        let (owner, name) = model_id
+            .split_once('/')
+            .ok_or_else(|| Error::msg("model ID must use the namespace/name format"))?;
         let (config_filename, tokenizer_filename, weights_filename) = {
-            let api = Api::new()?.repo(repo);
-            let config = api.get("config.json")?;
-            let tokenizer = api.get("tokenizer.json")?;
-            let weights = api.get("model.safetensors")?;
+            let repo = HFClientSync::new()?.model(owner, name);
+            let config = repo
+                .download_file()
+                .filename("config.json")
+                .revision(model_revision.clone())
+                .send()?;
+            let tokenizer = repo
+                .download_file()
+                .filename("tokenizer.json")
+                .revision(model_revision.clone())
+                .send()?;
+            let weights = repo
+                .download_file()
+                .filename("model.safetensors")
+                .revision(model_revision.clone())
+                .send()?;
             (config, tokenizer, weights)
         };
         let config_data = std::fs::read_to_string(config_filename)?;
@@ -175,7 +197,7 @@ impl CandleEmbedBuilder {
 pub struct BasedBertEmbedder {
     config: Config,
     mean_pooling: bool,
-    model: RefCell<Option<BertModel>>,
+    model: RefCell<Option<Arc<BertModel>>>,
     normalize_embeddings: bool,
     pub model_dimensions: usize,
     pub model_id: WithModel,
@@ -205,8 +227,48 @@ impl BasedBertEmbedder {
         let weights_filename = self.weights_filename.clone(); // Clone the weights_filename
         let vb =
             unsafe { VarBuilder::from_mmaped_safetensors(&[weights_filename], DTYPE, &device)? };
-        *self.model.borrow_mut() = Some(BertModel::load(vb, &self.config)?);
+        *self.model.borrow_mut() = Some(Arc::new(BertModel::load(vb, &self.config)?));
         Ok(())
+    }
+
+    /// Creates an independent inference handle that shares immutable model
+    /// tensors with this embedder. Tokenizer state remains per handle.
+    pub fn fork_shared(&self) -> Result<Self> {
+        if self.model.borrow().is_none() {
+            self.load_model()?;
+        }
+        if self.tokenizer.borrow().is_none() {
+            self.load_tokenizer()?;
+        }
+
+        let model = self
+            .model
+            .borrow()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| Error::msg("CandleEmbed error: model did not load"))?;
+        let tokenizer = self
+            .tokenizer
+            .borrow()
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| Error::msg("CandleEmbed error: tokenizer did not load"))?;
+
+        Ok(Self {
+            config: self.config.clone(),
+            mean_pooling: self.mean_pooling,
+            model: RefCell::new(Some(model)),
+            normalize_embeddings: self.normalize_embeddings,
+            model_dimensions: self.model_dimensions,
+            model_id: self.model_id.clone(),
+            model_max_input: self.model_max_input,
+            model_rev: self.model_rev.clone(),
+            tokenizer_filename: self.tokenizer_filename.clone(),
+            tokenizer: RefCell::new(Some(tokenizer)),
+            truncate_text_len_overflow: self.truncate_text_len_overflow,
+            weights_filename: self.weights_filename.clone(),
+            with_device: self.with_device.clone(),
+        })
     }
 
     /// Unloads the BERT model and tokenizer, freeing up memory. Call this when you are done using the model.
@@ -221,6 +283,8 @@ impl BasedBertEmbedder {
     fn init_device(&self) -> Result<Device> {
         if let WithDevice::Cpu = self.with_device {
             return Ok(Device::Cpu);
+        } else if let WithDevice::Metal = self.with_device {
+            return Ok(Device::new_metal(0)?);
         } else {
             if !candle::utils::cuda_is_available() {
                 eprintln!("CUDA is not available, falling back to CPU");
@@ -256,6 +320,19 @@ impl BasedBertEmbedder {
         Ok(Device::Cpu)
     }
 
+    /// Returns the active inference backend after the model is loaded.
+    pub fn active_device_name(&self) -> Option<&'static str> {
+        self.model.borrow().as_ref().map(|model| {
+            if model.device.is_metal() {
+                "metal"
+            } else if model.device.is_cuda() {
+                "cuda"
+            } else {
+                "cpu"
+            }
+        })
+    }
+
     /// Embeds a batch of texts using the loaded BERT model.
     ///
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
@@ -264,12 +341,91 @@ impl BasedBertEmbedder {
                 "CandleEmbed error: embed_batch called with empty texts",
             ));
         }
-        let mut embeddings = vec![];
-        for text in texts {
-            let embedding = self.embed_one(text)?;
-            embeddings.push(embedding);
+        if texts.iter().any(|text| text.is_empty()) {
+            return Err(Error::msg(
+                "CandleEmbed error: embed_batch called with empty text",
+            ));
         }
-        Ok(embeddings)
+
+        if !self.truncate_text_len_overflow {
+            for count in self.token_count_batch(texts)? {
+                if count > self.model_max_input {
+                    return Err(Error::msg(format!(
+                        "CandleEmbed error: Text input size of {} exceeds maximum input size of {}",
+                        count, self.model_max_input
+                    )));
+                }
+            }
+        }
+
+        if self.model.borrow().is_none() {
+            self.load_model()?;
+        }
+
+        let model = self.model.borrow();
+        let model = if let Some(model) = model.as_ref() {
+            model
+        } else {
+            panic!("Model did not load")
+        };
+
+        let device = &model.device;
+        let encodings = self.encode_texts(texts, true)?;
+        let batch_size = encodings.len();
+        let max_len = encodings
+            .iter()
+            .map(|encoding| encoding.get_ids().len())
+            .max()
+            .unwrap_or(0);
+        if max_len == 0 {
+            return Err(Error::msg(
+                "CandleEmbed error: tokenizer produced an empty batch",
+            ));
+        }
+
+        let pad_token_id = self.config.pad_token_id as u32;
+        let mut token_ids = Vec::with_capacity(batch_size * max_len);
+        let mut token_type_ids = Vec::with_capacity(batch_size * max_len);
+        let mut attention_mask = Vec::with_capacity(batch_size * max_len);
+
+        for encoding in encodings {
+            let ids = encoding.get_ids();
+            let types = encoding.get_type_ids();
+            for idx in 0..max_len {
+                if idx < ids.len() {
+                    token_ids.push(ids[idx]);
+                    token_type_ids.push(types.get(idx).copied().unwrap_or(0));
+                    attention_mask.push(1u32);
+                } else {
+                    token_ids.push(pad_token_id);
+                    token_type_ids.push(0u32);
+                    attention_mask.push(0u32);
+                }
+            }
+        }
+
+        let token_ids = Tensor::from_vec(token_ids, (batch_size, max_len), device)?;
+        let token_type_ids = Tensor::from_vec(token_type_ids, (batch_size, max_len), device)?;
+        let attention_mask = Tensor::from_vec(attention_mask, (batch_size, max_len), device)?;
+        let outputs = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+
+        let embedding = if self.mean_pooling {
+            let mask = attention_mask.to_dtype(outputs.dtype())?;
+            let masked_outputs = outputs.broadcast_mul(&mask.unsqueeze(2)?)?;
+            masked_outputs
+                .sum(1)?
+                .broadcast_div(&mask.sum_keepdim(1)?)?
+        } else {
+            outputs.i((.., 0))?
+        };
+
+        let embedding = if self.normalize_embeddings {
+            embedding.broadcast_div(&embedding.sqr()?.sum_keepdim(1)?.sqrt()?)?
+        } else {
+            embedding
+        };
+
+        Ok(embedding.to_vec2::<f32>()?)
     }
 
     /// Embeds a single text using the loaded BERT model.
@@ -308,7 +464,7 @@ impl BasedBertEmbedder {
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
 
-        let outputs = model.forward(&token_ids, &token_type_ids)?;
+        let outputs = model.forward(&token_ids, &token_type_ids, None)?;
 
         let embedding = if self.mean_pooling {
             // Mean pooling
@@ -388,22 +544,20 @@ impl BasedBertEmbedder {
         } else {
             panic!("Tokenizer did not load")
         };
-        let tokenizer = if with_trunc_settings && self.truncate_text_len_overflow {
+        if with_trunc_settings && self.truncate_text_len_overflow {
             tokenizer
                 .with_padding(None)
                 .with_truncation(Some(tokenizers::TruncationParams {
                     max_length: self.model_max_input,
                     ..Default::default()
                 }))
-                .map_err(anyhow::Error::msg)?
-                .clone()
+                .map_err(anyhow::Error::msg)?;
         } else {
             tokenizer
                 .with_padding(None)
                 .with_truncation(None)
-                .map_err(anyhow::Error::msg)?
-                .clone()
-        };
+                .map_err(anyhow::Error::msg)?;
+        }
         let encoding: tokenizers::Encoding = tokenizer.encode(text, true).map_err(Error::msg)?;
         Ok(encoding)
     }
@@ -424,22 +578,20 @@ impl BasedBertEmbedder {
         } else {
             panic!("Tokenizer did not load")
         };
-        let tokenizer = if with_trunc_settings && self.truncate_text_len_overflow {
+        if with_trunc_settings && self.truncate_text_len_overflow {
             tokenizer
                 .with_padding(None)
                 .with_truncation(Some(tokenizers::TruncationParams {
                     max_length: self.model_max_input,
                     ..Default::default()
                 }))
-                .map_err(anyhow::Error::msg)?
-                .clone()
+                .map_err(anyhow::Error::msg)?;
         } else {
             tokenizer
                 .with_padding(None)
                 .with_truncation(None)
-                .map_err(anyhow::Error::msg)?
-                .clone()
-        };
+                .map_err(anyhow::Error::msg)?;
+        }
         let encodings: Vec<tokenizers::Encoding> = tokenizer
             .encode_batch(texts.to_vec(), true)
             .map_err(Error::msg)?;
@@ -504,6 +656,40 @@ mod tests {
         let batch_embeddings = candle_embed.embed_batch(&texts)?;
         assert_eq!(batch_embeddings.len(), 3);
         assert_eq!(batch_embeddings[0].len(), candle_embed.model_dimensions);
+        candle_embed.unload();
+        Ok(())
+    }
+
+    #[test]
+    fn batch_embeddings_match_individual_embeddings() -> Result<()> {
+        let candle_embed = CandleEmbedBuilder::new().with_device_cpu().build()?;
+        let texts = vec![
+            "Short sentence.",
+            "This is a longer sentence that forces padding in the batched forward pass.",
+            "Medium length input for comparison.",
+        ];
+        let batch_embeddings = candle_embed.embed_batch(&texts)?;
+        let individual_embeddings = texts
+            .iter()
+            .map(|text| candle_embed.embed_one(text))
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_eq!(batch_embeddings.len(), individual_embeddings.len());
+        for (batch, individual) in batch_embeddings.iter().zip(individual_embeddings.iter()) {
+            assert_eq!(batch.len(), individual.len());
+            for (batch_value, individual_value) in batch.iter().zip(individual.iter()) {
+                assert!(
+                    (batch_value - individual_value).abs() < 1e-5,
+                    "batch value {batch_value} differs from individual value {individual_value}"
+                );
+            }
+        }
+
+        let shared = candle_embed.fork_shared()?;
+        assert_eq!(shared.active_device_name(), Some("cpu"));
+        let shared_embedding = shared.embed_one(texts[0])?;
+        assert_eq!(shared_embedding.len(), batch_embeddings[0].len());
+
         candle_embed.unload();
         Ok(())
     }

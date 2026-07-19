@@ -6,7 +6,9 @@ Text embeddings with any model on hugging face. Embedded in your app. Replace yo
 
 - Enums for most popular embedding models OR specify custom models from HF (check out the [leaderboard](https://huggingface.co/spaces/mteb/leaderboard))
 
-- GPU support with CUDA
+- GPU support with CUDA and Metal
+
+- Padded batched inference with attention-mask-aware pooling
 
 - Builder with easy access to configuration settings
 
@@ -17,9 +19,8 @@ Add the following to your Cargo.toml file:
 ```toml
 [dependencies]
 candle_embed = "*"
-
-[dependencies]
-candle_embed = { version = "*", features = ["cuda"] } // For CUDA support
+# candle_embed = { version = "*", features = ["cuda"] } # CUDA
+# candle_embed = { version = "*", features = ["metal"] } # Metal
 ```
 
 ### Basics 🫡
@@ -45,7 +46,7 @@ fn main() -> Result<()> {
         "This is the second sentence.",
         "This is the third sentence.",
     ];
-    let batch_embeddings = candle_embed.embed_batch(texts)?;
+    let batch_embeddings = candle_embed.embed_batch(&texts)?;
     
 
     Ok(())
@@ -82,11 +83,19 @@ fn main() -> Result<()> {
     //
     builder.with_device_specific_cuda(ordinal: usize);
 
+    // Use Metal device 0
+    //
+    builder.with_device_metal();
+
     // Use CPU (CUDA options fail over to this)
     //
     builder.with_device_cpu()
 
-    // Unload the model and tokenizer, dropping them from memory
+    // Create independent handles that share immutable model tensors
+    //
+    let worker = candle_embed.fork_shared()?;
+
+    // Unload the model and tokenizer, dropping this handle's references
     //
     candle_embed.unload();
 

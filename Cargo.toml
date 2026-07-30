@@ -12,13 +12,14 @@ version="0.1.4"
 
 [dependencies]
 anyhow="1.0.82"
-candle={version="0.5.0", package="candle-core", default-features=false}
-candle-transformers="0.5.0"
-candle_nn={version="0.5.0", package="candle-nn", default-features=false}
-hf-hub={version="0.3.2", features=["tokio"]}
+candle={version="0.10.2", package="candle-core", default-features=false}
+candle-transformers="0.10.2"
+candle_nn={version="0.10.2", package="candle-nn", default-features=false}
+hf-hub={version="1.0.0", features=["blocking"]}
 serde_json="1.0.116"
 tokenizers="0.19.1"
 
 [features]
-cuda=["candle/cuda", "candle/cudnn", "candle_nn/cuda"]
+cuda=["candle/cuda", "candle_nn/cuda"]
+metal=["candle/metal", "candle_nn/metal"]
 default=["cuda"]

@@ -14,6 +14,7 @@ pub const BGE_BASE_EN_V1_5: &str = "BAAI/bge-base-en-v1.5";
 pub const ALL_MINILM_L6_V2: &str = "sentence-transformers/all-MiniLM-L6-v2";
 
 /// `WithModel` is an enum that represents different preset embedding models or a custom model.
+#[derive(Clone)]
 pub enum WithModel {
     E5Mistral7bInstruct,
     SfrEmbeddingMistral,
